@@ -10,6 +10,6 @@ __pycache__/
 marca/
 deploy/
 iniciar.bat
-instrucoes.md
+instrucoes*.md
 README.md
 data/
