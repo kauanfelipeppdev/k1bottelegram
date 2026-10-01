@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="640" viewBox="0 0 640 640">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="38%" r="70%">
+      <stop offset="0" stop-color="#2a1458"/>
+      <stop offset="0.6" stop-color="#120a2e"/>
+      <stop offset="1" stop-color="#07051a"/>
+    </radialGradient>
+    <linearGradient id="neon" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22e4ff"/>
+      <stop offset="0.55" stop-color="#7b5cff"/>
+      <stop offset="1" stop-color="#ff3fb4"/>
+    </linearGradient>
+    <linearGradient id="tag" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ffb21e"/>
+      <stop offset="1" stop-color="#ff5a1f"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="9" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect width="640" height="640" fill="url(#bg)"/>
+  <!-- grade sutil estilo "hardware" -->
+  <g stroke="#ffffff" stroke-opacity="0.04" stroke-width="2">
+    <path d="M0 160H640M0 320H640M0 480H640M160 0V640M320 0V640M480 0V640"/>
+  </g>
+  <!-- anel neon (fica dentro do recorte circular) -->
+  <circle cx="320" cy="320" r="262" fill="none" stroke="url(#neon)" stroke-width="10" filter="url(#glow)"/>
+
+  <!-- K1 -->
+  <text x="304" y="368" text-anchor="middle" font-family="Segoe UI Black, Arial Black, sans-serif"
+        font-weight="900" font-size="230" letter-spacing="-8" fill="url(#neon)" filter="url(#glow)">K1</text>
+
+  <!-- etiqueta de preço com "OFERTAS" -->
+  <g transform="translate(320 452) rotate(-4)">
+    <path d="M-150 -38 H130 L162 0 L130 38 H-150 a10 10 0 0 1 -10 -10 V-28 a10 10 0 0 1 10 -10 Z" fill="url(#tag)"/>
+    <circle cx="128" cy="0" r="8" fill="#120a2e"/>
+    <text x="-14" y="17" text-anchor="middle" font-family="Segoe UI Black, Arial Black, sans-serif"
+          font-weight="900" font-size="48" letter-spacing="4" fill="#120a2e">OFERTAS</text>
+  </g>
+
+  <!-- raio -->
+  <path transform="translate(482 132) scale(0.82) translate(-452 -150)" d="M452 150 L408 236 H446 L414 314 L500 208 H460 L490 150 Z" fill="#ffd21e" filter="url(#glow)"/>
+</svg>

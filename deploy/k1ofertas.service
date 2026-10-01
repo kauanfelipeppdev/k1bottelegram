@@ -1,0 +1,17 @@
+[Unit]
+Description=K1 Ofertas - bot de ofertas gamer do Telegram
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=k1bot
+WorkingDirectory=/opt/k1ofertas
+Environment=DATA_DIR=/opt/k1ofertas/data
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/k1ofertas/.venv/bin/python bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+estado.json
+estado.tmp
+*.log
+__pycache__/
+*.pyc
+.git/
+marca/
+deploy/
+iniciar.bat
+instrucoes.md
+README.md
+data/
