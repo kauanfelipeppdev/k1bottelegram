@@ -34,6 +34,10 @@ DESTINOS = {
     "jogos_gratis": _destino("JOGOS_GRATIS"),
 }
 
+# Chat da equipe que recebe as ofertas suspeitas para análise (vazio = descarta direto)
+REVISAO = _destino("REVISAO")
+REVISAO_HORAS = float(os.environ.get("REVISAO_HORAS", "2"))  # depois disso a oferta expira
+
 # Canais públicos do Telegram usados como fonte extra (separados por vírgula)
 CANAIS_FONTE = [c.strip().lstrip("@").replace("https://t.me/", "")
                 for c in os.environ.get("CANAIS_FONTE", "").split(",") if c.strip()]
@@ -41,6 +45,14 @@ CANAIS_FONTE = [c.strip().lstrip("@").replace("https://t.me/", "")
 AMAZON_TAG = os.environ.get("AMAZON_TAG", "").strip()
 ML_MATT_TOOL = os.environ.get("ML_MATT_TOOL", "").strip()
 ML_MATT_WORD = os.environ.get("ML_MATT_WORD", "").strip()
+# AliExpress: app da Open Platform (App Key/Secret) + Tracking ID do Portals
+ALI_APP_KEY = os.environ.get("ALI_APP_KEY", "").strip()
+ALI_APP_SECRET = os.environ.get("ALI_APP_SECRET", "").strip()
+ALI_TRACKING_ID = os.environ.get("ALI_TRACKING_ID", "").strip()
+
+# IA (Groq) para a frase criativa de cada oferta; vazio = sem frase
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+GROQ_MODELO = os.environ.get("GROQ_MODELO", "").strip() or "openai/gpt-oss-120b"
 
 INTERVALO_OFERTAS = int(os.environ.get("INTERVALO_OFERTAS_MIN", "5")) * 60
 INTERVALO_JOGOS = int(os.environ.get("INTERVALO_JOGOS_MIN", "60")) * 60

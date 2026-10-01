@@ -5,6 +5,7 @@ Uso:
   python bot.py --descobrir  mostra os IDs de chats/tópicos onde o bot está
   python bot.py --simular    busca as ofertas e mostra no terminal, sem enviar
 """
+import hashlib
 import html
 import logging
 import sys
@@ -12,10 +13,11 @@ import time
 from datetime import datetime, timezone, timedelta
 
 import config
+import ia
 from afiliados import link_afiliado
 from classificador import classificar
 from estado import Estado
-from qualidade import Limite, motivo_para_descartar
+from qualidade import Limite, motivo_de_suspeita, motivo_para_descartar
 from fontes import canais, epic, promobit, steam
 from telegram_api import Telegram
 
@@ -88,9 +90,14 @@ def _registrar_enviada(estado, o, tipo, link):
     del enviadas[:-300]
 
 
-def formatar_oferta(o, tipo, link=None):
+def formatar_oferta(o, tipo, link=None, analisada=False):
     e = html.escape
-    linhas = [f"{EMOJI[tipo]} <b>{NOME[tipo]}</b>", "", f"<b>{e(o['titulo'])}</b>", ""]
+    linhas = [f"{EMOJI[tipo]} <b>{NOME[tipo]}</b>"]
+    if analisada:
+        linhas.append("✅ <b>Analisada pela equipe K1</b>")
+    linhas += ["", f"<b>{e(o['titulo'])}</b>", ""]
+    if o.get("legenda"):
+        linhas += [f"<i>{e(o['legenda'])}</i>", ""]
     if o["preco"]:
         prefixo = "A partir de " if o["tipo_preco"] == "STARTING_AT" else ""
         preco = f"💰 {prefixo}<b>{_real(o['preco'])}</b>"
@@ -120,6 +127,86 @@ def formatar_jogo(j):
     return "\n".join(linhas)
 
 
+def _publicar(tg, estado, o, tipo, analisada=False):
+    if "legenda" not in o:  # as que passaram pela análise já têm
+        o["legenda"] = ia.gerar_legenda(o, tipo)
+    link = link_afiliado(o)
+    tg.enviar(config.DESTINOS[tipo], formatar_oferta(o, tipo, link, analisada), o["imagem"])
+    limite.registrar(tipo)
+    _registrar_enviada(estado, o, tipo, link)
+    estado.registrar_produto(o["titulo"], o["preco"])
+
+
+# --- Fila de análise: ofertas suspeitas vão para o chat da equipe com botões Postar/Descartar ---
+
+CAMPOS_REVISAO = ("id", "fonte", "titulo", "preco", "preco_antigo", "tipo_preco", "desconto",
+                  "cupom", "loja", "imagem", "link", "likes", "legenda")
+
+
+def _pedir_revisao(tg, estado, o, tipo, motivo):
+    o["legenda"] = ia.gerar_legenda(o, tipo)
+    rid = hashlib.md5(o["id"].encode()).hexdigest()[:12]
+    expira = time.time() + config.REVISAO_HORAS * 3600
+    aviso = (f"⚠️ <b>EM ANÁLISE</b>: {html.escape(motivo)}\n"
+             f"⏰ Expira às {datetime.fromtimestamp(expira, BRT):%H:%M}\n\n")
+    botoes = {"inline_keyboard": [[{"text": "✅ Postar", "callback_data": f"rev:ok:{rid}"},
+                                   {"text": "❌ Descartar", "callback_data": f"rev:no:{rid}"}]]}
+    msg = tg.enviar(config.REVISAO, aviso + formatar_oferta(o, tipo), o["imagem"], botoes)
+    estado.dados.setdefault("revisao", {})[rid] = {
+        "oferta": {k: o.get(k) for k in CAMPOS_REVISAO}, "tipo": tipo, "expira": expira,
+        "chat_id": msg["chat"]["id"], "msg_id": msg["message_id"]}
+
+
+def _fechar_revisao(tg, item, status):
+    """Troca os botões da mensagem de análise por um rótulo com o resultado."""
+    try:
+        tg._chamar("editMessageReplyMarkup", chat_id=item["chat_id"], message_id=item["msg_id"],
+                   reply_markup={"inline_keyboard": [[{"text": status, "callback_data": "rev:fim"}]]})
+    except Exception as e:
+        log.warning("Não consegui atualizar a mensagem de análise: %s", e)
+
+
+def _responder_botao(tg, estado, cb):
+    _, acao, rid = ((cb.get("data") or "") + "::").split(":")[:3]
+    item = estado.dados.get("revisao", {}).get(rid)
+    if not item:
+        return tg._chamar("answerCallbackQuery", callback_query_id=cb["id"],
+                          text="Essa oferta já foi resolvida ou expirou.")
+    quem = (cb.get("from") or {}).get("first_name", "")
+    o, tipo = item["oferta"], item["tipo"]
+    if acao == "ok":
+        try:
+            _publicar(tg, estado, o, tipo, analisada=True)
+        except Exception as e:
+            log.error("Erro ao postar oferta analisada %s: %s", o["id"], e)
+            return tg._chamar("answerCallbackQuery", callback_query_id=cb["id"],
+                              text=f"Erro ao postar: {e}"[:200], show_alert=True)
+        status, resposta = f"✅ Postada por {quem}", "Oferta postada!"
+    else:
+        status, resposta = f"❌ Descartada por {quem}", "Oferta descartada."
+    del estado.dados["revisao"][rid]
+    log.info("Análise: %s → %s", o["titulo"], status)
+    tg._chamar("answerCallbackQuery", callback_query_id=cb["id"], text=resposta)
+    _fechar_revisao(tg, item, status)
+
+
+def ciclo_revisao(tg, estado, espera):
+    """Expira as ofertas paradas na fila e espera (até `espera` s) cliques nos botões."""
+    fila = estado.dados.get("revisao", {})
+    for rid, item in list(fila.items()):
+        if item["expira"] < time.time():
+            log.info("Análise: %s expirou.", item["oferta"]["titulo"])
+            del fila[rid]
+            _fechar_revisao(tg, item, "⌛ Expirou sem análise")
+    if not config.REVISAO:
+        time.sleep(espera)
+        return
+    for u in tg.atualizacoes(estado.dados.get("update_offset"), espera, ["callback_query"]):
+        estado.dados["update_offset"] = u["update_id"] + 1
+        if u.get("callback_query"):
+            _responder_botao(tg, estado, u["callback_query"])
+
+
 def _processar(tg, estado, ofertas, chave, simular=False):
     """Envia as ofertas novas de uma fonte. Na primeira leitura só registra, para não lotar o grupo."""
     primeira_vez = not estado.inicializado(chave)
@@ -131,7 +218,8 @@ def _processar(tg, estado, ofertas, chave, simular=False):
         if simular:
             if tipo:
                 motivo = motivo_para_descartar(o)
-                status = f"DESCARTE: {motivo}" if motivo else "ok"
+                suspeita = motivo_de_suspeita(o)
+                status = f"DESCARTE: {motivo}" if motivo else f"ANÁLISE: {suspeita}" if suspeita else "ok"
                 print(f"[{tipo}] {o['titulo'][:60]} — {o['preco']} ({o['loja']}) → {status}")
             continue
         if estado.ja_viu(chave, o["id"]):
@@ -139,19 +227,23 @@ def _processar(tg, estado, ofertas, chave, simular=False):
         destino = config.DESTINOS.get(tipo) if tipo else None
         if tipo and destino and not primeira_vez:
             motivo = motivo_para_descartar(o)
-            if not motivo and estado.produto_recente(o["titulo"], config.DIAS_SEM_REPETIR):
-                motivo = "produto repetido"
-            if motivo:
-                log.info("Descartada (%s): %s", motivo, o["titulo"])
+            if not motivo and (igual := estado.produto_recente(o["titulo"], o["preco"], config.DIAS_SEM_REPETIR)):
+                motivo = f"produto repetido, igual a: {igual[:60]}"
+            suspeita = None if motivo else motivo_de_suspeita(o)
+            if motivo or (suspeita and not config.REVISAO):
+                log.info("Descartada (%s): %s", motivo or suspeita, o["titulo"])
+            elif suspeita:
+                try:
+                    _pedir_revisao(tg, estado, o, tipo, suspeita)
+                    log.info("Enviada para análise (%s): %s", suspeita, o["titulo"])
+                except Exception as e:
+                    log.error("Erro ao enviar oferta %s para análise: %s", o["id"], e)
+                    continue
             elif not limite.pode(tipo):
                 continue  # tópico no limite da hora: tenta de novo no próximo ciclo
             else:
                 try:
-                    link = link_afiliado(o)
-                    tg.enviar(destino, formatar_oferta(o, tipo, link), o["imagem"])
-                    limite.registrar(tipo)
-                    _registrar_enviada(estado, o, tipo, link)
-                    estado.registrar_produto(o["titulo"])
+                    _publicar(tg, estado, o, tipo)
                     enviadas += 1
                     time.sleep(3)
                 except Exception as e:
@@ -241,6 +333,8 @@ def main():
     faltando = [k for k, v in config.DESTINOS.items() if not v]
     if faltando:
         log.warning("Destinos sem configuração no .env (serão ignorados): %s", ", ".join(faltando))
+    if not config.REVISAO:
+        log.warning("REVISAO_CHAT_ID vazio: ofertas suspeitas serão descartadas sem análise.")
     log.info("Bot @%s iniciado.", tg.eu()["username"])
 
     proximo_ofertas = proximo_jogos = 0.0
@@ -265,7 +359,12 @@ def main():
         except Exception as e:
             log.error("Erro no Top do dia: %s", e)
         estado.salvar()
-        time.sleep(15)
+        try:
+            ciclo_revisao(tg, estado, espera=15)  # também faz a pausa entre as voltas
+        except Exception as e:
+            log.error("Erro na fila de análise: %s", e)
+            time.sleep(15)
+        estado.salvar()
 
 
 if __name__ == "__main__":

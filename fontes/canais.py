@@ -14,6 +14,7 @@ _LINK = re.compile(r'href="(https?://[^"]+)"')
 _PRECO = re.compile(r"R\$\s*([\d.]+(?:,\d{1,2})?)")
 _CUPOM = re.compile(r"cupom\s*:\s*(.+)", re.I)
 _DATA = re.compile(r'<time[^>]*datetime="([^"]+)"')
+_FOTO = re.compile(r"tgme_widget_message_photo_wrap[^>]*?background-image:url\('([^']+)'\)")
 # Linhas que não são nome de produto (avisos, links, preço)
 _NAO_TITULO = re.compile(r"^(http|valor|cupom|link|r\$|apenas pelo|so no app|só no app|\(anuncio\))", re.I)
 
@@ -68,7 +69,7 @@ def buscar_ofertas(canal: str):
         if not titulo:
             continue
         cupom = next((m[1].strip() for l in linhas if (m := _CUPOM.search(l))), None)
-        data = _DATA.search(bloco)
+        data, foto = _DATA.search(bloco), _FOTO.search(bloco)
         ofertas.append({
             "id": f"tg:{canal}:{post[1]}",
             "fonte": "telegram",
@@ -80,7 +81,8 @@ def buscar_ofertas(canal: str):
             "cupom": cupom,
             "loja": _loja(links[0]),
             "categoria_id": None,
-            "imagem": None,  # não reaproveitamos a arte do outro canal
+            # Foto do post (é a do produto). Link de loja encurtado quase nunca gera prévia com foto.
+            "imagem": foto[1] if foto else None,
             "link": links[0],
             "publicado": datetime.fromisoformat(data[1]) if data else None,
         })

@@ -2,7 +2,8 @@ import json
 import time
 from pathlib import Path
 
-from qualidade import palavras, parecidos
+import ia
+from qualidade import comparar
 
 LIMITE = 5000  # quantos IDs guardar por categoria
 
@@ -23,16 +24,26 @@ class Estado:
             lista.append(item_id)
             del lista[:-LIMITE]
 
-    def produto_recente(self, titulo: str, dias: float) -> bool:
-        """True se um produto parecido já foi enviado nos últimos `dias` (de qualquer fonte)."""
+    def produto_recente(self, titulo: str, preco, dias: float):
+        """Título do produto igual enviado nos últimos `dias` (ou esperando análise), ou None."""
         limite = time.time() - dias * 86400
         recentes = [p for p in self.dados.get("produtos_recentes", []) if p[1] >= limite]
         self.dados["produtos_recentes"] = recentes
-        alvo = palavras(titulo)
-        return any(parecidos(alvo, p[0].split()) for p in recentes)
+        # Formato: [titulo, ts, preco]. Registros antigos só têm [palavras, ts].
+        candidatos = [(p[0], p[2] if len(p) > 2 else None) for p in recentes]
+        candidatos += [(r["oferta"]["titulo"], r["oferta"]["preco"]) for r in self.dados.get("revisao", {}).values()]
+        talvez = []
+        for outro, outro_preco in candidatos:
+            resultado = comparar(titulo, outro, preco, outro_preco)
+            if resultado == "igual":
+                return outro
+            if resultado == "talvez":
+                talvez.append(outro)
+        # Casos duvidosos: a IA desempata (no máximo 3 perguntas, das mais recentes)
+        return next((outro for outro in reversed(talvez[-3:]) if ia.mesmo_produto(titulo, outro)), None)
 
-    def registrar_produto(self, titulo: str):
-        self.dados.setdefault("produtos_recentes", []).append([" ".join(palavras(titulo)), time.time()])
+    def registrar_produto(self, titulo: str, preco=None):
+        self.dados.setdefault("produtos_recentes", []).append([titulo, time.time(), preco])
 
     def inicializado(self, chave: str) -> bool:
         return chave in self.dados

@@ -24,3 +24,13 @@ python bot.py             # roda o bot
 Na primeira execução as ofertas que já existem são só registradas, para não lotar o canal.
 Depois disso, só as novas são enviadas. O que já foi enviado fica em `estado.json`.
 Os termos de cada categoria ficam em `classificador.py`.
+
+## Análise de ofertas suspeitas
+
+Ofertas com preço abaixo de `PRECO_MINIMO` ou avaliação negativa não são descartadas:
+vão para o chat de `REVISAO_CHAT_ID` com os botões **✅ Postar** e **❌ Descartar**.
+As aprovadas saem no grupo com o selo "✅ Analisada pela equipe K1". Se ninguém
+decidir em `REVISAO_HORAS` (padrão 2h), a oferta expira.
+
+Para receber no seu privado: mande `/start` para o bot, rode `python bot.py --descobrir`
+(com o bot parado) e copie o `CHAT_ID` do tipo `private` para `REVISAO_CHAT_ID`.
