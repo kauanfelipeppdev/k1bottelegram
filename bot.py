@@ -15,7 +15,7 @@ from datetime import datetime, timezone, timedelta
 import config
 import ia
 from afiliados import link_afiliado
-from classificador import classificar
+from classificador import classificar, explicar
 from estado import Estado
 from qualidade import Limite, motivo_de_suspeita, motivo_para_descartar
 from fontes import canais, epic, promobit, steam
@@ -216,7 +216,11 @@ def _processar(tg, estado, ofertas, chave, simular=False):
     for o in ofertas:
         tipo = classificar(o["titulo"], o["categoria_id"])
         if simular:
-            if tipo:
+            if not tipo:
+                _, por_que = explicar(o["titulo"], o["categoria_id"])
+                if por_que != "não é hardware/periférico":  # mostra só o que quase passou
+                    print(f"[ignorada] {o['titulo'][:60]} → {por_que}")
+            else:
                 motivo = motivo_para_descartar(o)
                 suspeita = motivo_de_suspeita(o)
                 status = f"DESCARTE: {motivo}" if motivo else f"ANÁLISE: {suspeita}" if suspeita else "ok"
