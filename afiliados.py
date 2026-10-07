@@ -1,7 +1,8 @@
-"""Troca o link do Promobit pelo link direto da loja com o SEU código de afiliado.
+"""Troca o link do Promobit pelo link direto da loja, com o SEU código de afiliado quando possível.
 
-Se algo der errado (loja não suportada, código não configurado, produto não
-identificado com segurança), mantém o link do Promobit.
+Lojas sem afiliado configurado recebem o link direto da loja (sem passar pelo site do
+Promobit). Se algo der errado com o afiliado (código não configurado, produto não
+identificado com segurança), mantém o link direto da loja.
 """
 import hashlib
 import hmac
@@ -9,7 +10,7 @@ import json
 import logging
 import re
 import time
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import requests
 
@@ -29,12 +30,32 @@ _ML_TITULO = re.compile(r'<meta property="og:title" content="([^"]+)"')
 _ALI_LINK = re.compile(r"https?://[\w.-]*aliexpress\.[a-z.]+/[^'\"\s<>]*")
 _ALI_ITEM = re.compile(r"(?:/item/|/i/|productIds?=)(\d{6,})")
 ALI_API = "https://api-sg.aliexpress.com/sync"
+# Na página de redirecionamento do Promobit, o link da loja fica numa variável JavaScript
+_LINK_PROMOBIT = re.compile(r"\bl = '([^']+)'")
 
 
-def _pagina_redirect(oferta_id: str) -> str:
-    r = requests.get(REDIRECT.format(oferta_id), headers=HEADERS, timeout=20)
+def _desembrulhar(url: str) -> str:
+    """Links de rede de afiliados (Rakuten, Awin) carregam o link da loja num parâmetro."""
+    params = parse_qs(urlsplit(url).query)
+    for chave in ("murl", "ued"):
+        if params.get(chave):
+            return params[chave][0]
+    return url
+
+
+def _loja_promobit(oferta_id: str):
+    """Link direto da loja de uma oferta do Promobit, ou None se não achar."""
+    for tentativa in range(3):
+        r = requests.get(REDIRECT.format(oferta_id), headers=HEADERS, timeout=20)
+        if r.status_code != 429:  # 429 = muitos acessos seguidos: espera e tenta de novo
+            break
+        espera = r.headers.get("Retry-After", "")
+        time.sleep(min(int(espera), 60) if espera.isdigit() else 10)
     r.raise_for_status()
-    return r.text
+    m = _LINK_PROMOBIT.search(r.text)
+    if not m or "promobit.com.br" in m[1]:
+        return None
+    return _desembrulhar(m[1])
 
 
 def _palavras(texto: str) -> set:
@@ -48,10 +69,12 @@ def _parecido(a: str, b: str) -> bool:
     return len(pa & pb) / min(len(pa), len(pb)) >= 0.5
 
 
-def _amazon(pagina: str):
-    m = _AMAZON.search(pagina)
+def _amazon(origem: str):
+    m = _AMAZON.search(origem)
     if not m:
         return None
+    if not config.AMAZON_TAG:  # sem tag: link limpo, sem o código de afiliado de terceiros
+        return f"https://www.amazon.com.br/dp/{m[1]}"
     return f"https://www.amazon.com.br/dp/{m[1]}?{urlencode({'tag': config.AMAZON_TAG})}"
 
 
@@ -109,22 +132,28 @@ def _link_da_loja(oferta: dict):
     """Link original da loja: do próprio canal, ou da página de redirecionamento do Promobit."""
     if oferta.get("fonte") == "telegram":
         return oferta["link"]
-    return _pagina_redirect(oferta["id"].split(":", 1)[1])
+    return _loja_promobit(oferta["id"].split(":", 1)[1])
 
 
 def link_afiliado(oferta: dict) -> str:
     loja = normalizar(oferta.get("loja") or "")
     try:
-        if "amazon" in loja and config.AMAZON_TAG:
-            origem = _link_da_loja(oferta)
+        origem = _link_da_loja(oferta)
+    except Exception as e:
+        log.warning("Não consegui o link da loja para %s: %s", oferta["id"], e)
+        origem = None
+    if not origem:
+        return oferta["link"]
+    try:
+        if "amazon" in loja:
             if oferta.get("fonte") == "telegram":  # link encurtado (link.amazon, amzn.to)
                 origem = requests.get(origem, headers=HEADERS, timeout=20).url
-            return _amazon(origem) or oferta["link"]
+            return _amazon(origem) or origem
         if "mercado livre" in loja and config.ML_MATT_TOOL:
-            m = _MELI.search(_link_da_loja(oferta))
-            return (_mercado_livre(m[0], oferta["titulo"]) if m else None) or oferta["link"]
+            m = _MELI.search(origem)
+            return (_mercado_livre(m[0], oferta["titulo"]) if m else None) or origem
         if "aliexpress" in loja and config.ALI_APP_KEY:
-            return _aliexpress(_link_da_loja(oferta)) or oferta["link"]
+            return _aliexpress(origem) or origem
     except Exception as e:
         log.warning("Falha ao gerar link de afiliado para %s: %s", oferta["id"], e)
-    return oferta["link"]
+    return origem

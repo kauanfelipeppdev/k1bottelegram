@@ -45,17 +45,22 @@ mecanico mecanica optico teclas hot swappable dpi hz mhz ghz gb tb mm cm polegad
 interno interna externo disco estado solido desktop laptop amd intel nvidia geforce radeon
 """.split())
 
-_UNIDADE = re.compile(r"^\d+(gb|tb|mb|mhz|ghz|khz|hz|w|mm|cm|dpi|mah|g|ms|k|kdpi|p|pol|v|x)$")
+# Especificações técnicas: aparecem em produtos de marcas e modelos diferentes, então não
+# servem para saber se dois anúncios são do mesmo produto (ex.: dois monitores 24" IPS 144Hz FHD).
+_SPEC = re.compile(
+    r"^(\d{1,2}|\d+(gb|tb|mb|mbs|gbps|mhz|ghz|khz|hz|w|mm|cm|dpi|mah|g|ms|k|kdpi|p|pol|v|x|fps|rpm|nm)"
+    r"|\d{3,4}x\d{3,4}|hdr\d*|g?ddr\d+x?|pcie\d*|gen\d|m2|usb\d*|wifi\d*e?|bt\d*|cl\d+"
+    r"|ips|va|tn|oled|qled|hd|fhd|qhd|uhd|wqhd|mbr|nativo|sync|freesync|gsync|hdmi|displayport|dp)$")
 
 
 def _relevantes(titulo: str) -> set:
-    return set(palavras(titulo)) - GENERICAS
+    return {p for p in palavras(titulo) if p not in GENERICAS and not _SPEC.match(p)}
 
 
 def _codigos(relevantes: set) -> set:
     """Códigos de modelo: letra+número (g203, v9, 5700x, nk68) ou número de 3+ dígitos (4060)."""
-    return {p for p in relevantes if not _UNIDADE.match(p) and (
-        (re.search(r"\d", p) and re.search(r"[a-z]", p)) or (p.isdigit() and len(p) >= 3))}
+    return {p for p in relevantes if
+            (re.search(r"\d", p) and re.search(r"[a-z]", p)) or (p.isdigit() and len(p) >= 3)}
 
 
 def comparar(titulo_a: str, titulo_b: str, preco_a=None, preco_b=None):

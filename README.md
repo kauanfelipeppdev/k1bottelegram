@@ -4,8 +4,14 @@ Publica no Telegram:
 - **Hardware** (placa de vídeo, processador, SSD, RAM, placa-mãe, fonte, gabinete, cooler, PC gamer)
 - **Periféricos** (mouse, teclado, headset, monitor, mousepad, controle, webcam, microfone, cadeira)
 - **Jogos grátis** (Epic Games e Steam com 100% OFF)
+- **Jogos em promoção** (mais vendidos da Steam e da Epic com pelo menos `JOGOS_DESCONTO_MINIMO`% OFF,
+  no máximo `JOGOS_PROMO_POR_HORA` por hora, maiores descontos primeiro)
 
-Fontes: API do Promobit (ofertas, a cada 5 min) e as APIs da Epic e da Steam (jogos, a cada 60 min).
+Fontes: API do Promobit e canais do Telegram (ofertas, a cada 5 min) e as APIs da Epic e da Steam
+(jogos, a cada 60 min). Ofertas do Promobit saem com o link direto da loja, não o do site do Promobit.
+
+Cada tópico recebe no máximo `MAX_POR_HORA` ofertas por hora; as que passam disso esperam numa
+fila (até `FILA_HORAS`) e saem quando o limite libera.
 
 ## Configuração
 

@@ -29,6 +29,7 @@ BRT = timezone(timedelta(hours=-3))
 EMOJI = {"hardware": "🖥️", "perifericos": "🎮"}
 NOME = {"hardware": "HARDWARE", "perifericos": "PERIFÉRICOS"}
 limite = Limite(config.MAX_POR_HORA)
+limite_jogos = Limite(config.JOGOS_PROMO_POR_HORA)
 
 
 def _real(valor):
@@ -127,6 +128,18 @@ def formatar_jogo(j):
     return "\n".join(linhas)
 
 
+def formatar_promo(j):
+    e = html.escape
+    linhas = ["🏷️ <b>JOGO EM PROMOÇÃO</b>", "", f"<b>{e(j['titulo'])}</b>", f"🕹️ {j['plataforma']}",
+              f"💰 <b>{_real(j['preco'])}</b>  <s>{_real(j['preco_antigo'])}</s>  (-{j['desconto']:.0f}%)"]
+    if j.get("avaliacao"):
+        linhas.append(f"👍 {e(j['avaliacao'])}")
+    if j.get("ate"):
+        linhas.append(f"⏰ Promoção até {j['ate'].astimezone(BRT):%d/%m às %H:%M}")
+    linhas += ["", f"🔗 <a href=\"{e(j['link'])}\">Ver na {j['plataforma']}</a>"] + _rodape()
+    return "\n".join(linhas)
+
+
 def _publicar(tg, estado, o, tipo, analisada=False):
     if "legenda" not in o:  # as que passaram pela análise já têm
         o["legenda"] = ia.gerar_legenda(o, tipo)
@@ -139,8 +152,9 @@ def _publicar(tg, estado, o, tipo, analisada=False):
 
 # --- Fila de análise: ofertas suspeitas vão para o chat da equipe com botões Postar/Descartar ---
 
-CAMPOS_REVISAO = ("id", "fonte", "titulo", "preco", "preco_antigo", "tipo_preco", "desconto",
-                  "cupom", "loja", "imagem", "link", "likes", "legenda")
+CAMPOS_OFERTA = ("id", "fonte", "titulo", "preco", "preco_antigo", "tipo_preco", "desconto",
+                 "cupom", "loja", "imagem", "link", "likes")
+CAMPOS_REVISAO = CAMPOS_OFERTA + ("legenda",)
 
 
 def _pedir_revisao(tg, estado, o, tipo, motivo):
@@ -244,7 +258,11 @@ def _processar(tg, estado, ofertas, chave, simular=False):
                     log.error("Erro ao enviar oferta %s para análise: %s", o["id"], e)
                     continue
             elif not limite.pode(tipo):
-                continue  # tópico no limite da hora: tenta de novo no próximo ciclo
+                # Tópico no limite da hora: a oferta espera na fila (o canal de origem só mostra
+                # as últimas ~20 mensagens, então esperar por ela lá faria ela sumir).
+                estado.dados.setdefault("fila", []).append(
+                    {"oferta": {k: o.get(k) for k in CAMPOS_OFERTA}, "tipo": tipo, "ts": time.time()})
+                log.info("Limite de %d/h em %s, oferta na fila: %s", config.MAX_POR_HORA, tipo, o["titulo"])
             else:
                 try:
                     _publicar(tg, estado, o, tipo)
@@ -264,7 +282,30 @@ def _processar(tg, estado, ofertas, chave, simular=False):
         log.info("%s: %d novas enviadas.", chave, enviadas)
 
 
+def ciclo_fila(tg, estado):
+    """Posta as ofertas que esperavam o limite por hora liberar, na ordem em que chegaram."""
+    fila = estado.dados.get("fila", [])
+    for item in list(fila):
+        o, tipo = item["oferta"], item["tipo"]
+        if time.time() - item["ts"] > config.FILA_HORAS * 3600:
+            log.info("Fila: esperou mais de %gh, descartada: %s", config.FILA_HORAS, o["titulo"])
+        elif not limite.pode(tipo):
+            continue
+        elif igual := estado.produto_recente(o["titulo"], o["preco"], config.DIAS_SEM_REPETIR):
+            log.info("Fila: descartada (produto repetido, igual a: %s): %s", igual[:60], o["titulo"])
+        else:
+            try:
+                _publicar(tg, estado, o, tipo)
+                time.sleep(3)
+            except Exception as e:
+                log.error("Erro ao enviar oferta da fila %s: %s", o["id"], e)
+                continue
+        fila.remove(item)
+
+
 def ciclo_ofertas(tg, estado, simular=False):
+    if not simular:
+        ciclo_fila(tg, estado)  # antes das novas, para manter a ordem
     # A API do Promobit vem da mais nova para a mais antiga; enviamos em ordem cronológica.
     _processar(tg, estado, list(reversed(promobit.buscar_ofertas())), "ofertas", simular)
     for canal in config.CANAIS_FONTE:
@@ -298,26 +339,74 @@ def ciclo_jogos(tg, estado, simular=False):
         log.info("Jogos grátis encontrados: %d.", len(jogos))
 
 
-def descobrir(tg):
-    print(f"Bot: @{tg.eu()['username']}\n")
-    vistos = set()
-    for u in tg.atualizacoes():
-        msg = u.get("message") or u.get("channel_post") or {}
-        chat = msg.get("chat") or (u.get("my_chat_member") or {}).get("chat")
-        if not chat:
+def ciclo_promocoes(tg, estado, simular=False):
+    """Jogos mais vendidos em promoção na Steam e na Epic; os maiores descontos saem primeiro."""
+    jogos = []
+    for nome, fonte in (("Steam", steam), ("Epic", epic)):
+        try:
+            jogos += fonte.buscar_promocoes()
+        except Exception as e:
+            log.error("Erro buscando promoções na %s: %s", nome, e)
+    jogos = sorted((j for j in jogos if j["desconto"] >= config.JOGOS_DESCONTO_MINIMO),
+                   key=lambda j: j["desconto"], reverse=True)
+    destino = config.DESTINOS["jogos_promo"]
+    # Chave = jogo + preço: o mesmo jogo volta a ser postado se o preço cair de novo.
+    vistos = estado.dados.setdefault("jogos_promo", {}) if not simular else {}
+    limite_ts = time.time() - config.JOGOS_DIAS_SEM_REPETIR * 86400
+    for chave in [c for c, ts in vistos.items() if ts < limite_ts]:
+        del vistos[chave]
+    enviados = 0
+    for j in jogos:
+        if simular:
+            print(f"[promo] {j['plataforma']}: {j['titulo']} — {_real(j['preco'])} (-{j['desconto']}%)")
             continue
-        chave = (chat["id"], msg.get("message_thread_id"))
-        if chave in vistos:
+        chave = f"{j['id']}:{j['preco']:.2f}"
+        if chave in vistos or not destino or not limite_jogos.pode("jogos_promo"):
             continue
-        vistos.add(chave)
-        nome = chat.get("title") or chat.get("username") or chat.get("first_name")
-        linha = f"{chat['type']:<10} CHAT_ID={chat['id']:<16} {nome}"
-        if msg.get("is_topic_message"):
-            linha += f"   (tópico THREAD_ID={msg['message_thread_id']})"
-        print(linha)
+        try:
+            tg.enviar(destino, formatar_promo(j), j["imagem"])
+            limite_jogos.registrar("jogos_promo")
+            vistos[chave] = time.time()
+            enviados += 1
+            time.sleep(3)
+        except Exception as e:
+            log.error("Erro ao enviar promoção %s: %s", j["id"], e)
+    if not simular:
+        log.info("Jogos em promoção: %d com desconto ≥ %g%%, %d enviados.",
+                 len(jogos), config.JOGOS_DESCONTO_MINIMO, enviados)
+
+
+def descobrir(tg, minutos=2):
+    print(f"Bot: @{tg.eu()['username']}")
+    print(f"Escutando por {minutos} minutos: mande uma mensagem em cada canal/tópico agora "
+          "(Ctrl+C para sair).\n")
+    vistos, offset, fim = set(), None, time.time() + minutos * 60
+    while time.time() < fim:
+        try:
+            atualizacoes = tg.atualizacoes(offset, 20)
+        except RuntimeError as e:
+            if "Conflict" in str(e):
+                sys.exit("O bot está rodando em outro lugar (no PC ou na VPS) e pegando as mensagens.\n"
+                         "Pare ele (na VPS: sudo systemctl stop k1ofertas) e rode este comando de novo.")
+            raise
+        for u in atualizacoes:
+            offset = u["update_id"] + 1
+            msg = u.get("message") or u.get("channel_post") or {}
+            chat = msg.get("chat") or (u.get("my_chat_member") or {}).get("chat")
+            if not chat:
+                continue
+            chave = (chat["id"], msg.get("message_thread_id"))
+            if chave in vistos:
+                continue
+            vistos.add(chave)
+            nome = chat.get("title") or chat.get("username") or chat.get("first_name")
+            linha = f"{chat['type']:<10} CHAT_ID={chat['id']:<16} {nome}"
+            if msg.get("is_topic_message"):
+                linha += f"   (tópico THREAD_ID={msg['message_thread_id']})"
+            print(linha, flush=True)
     if not vistos:
-        print("Nada encontrado. Adicione o bot como admin no canal/grupo, mande uma mensagem\n"
-              "lá (em cada tópico, se usar tópicos) e rode este comando de novo.")
+        print("Nada encontrado. Confira se o bot está parado em todos os lugares (PC e VPS), se ele é\n"
+              "admin no canal/grupo, e mande a mensagem enquanto este comando estiver rodando.")
 
 
 def main():
@@ -332,6 +421,7 @@ def main():
     if "--simular" in sys.argv:
         ciclo_ofertas(tg, estado, simular=True)
         ciclo_jogos(tg, estado, simular=True)
+        ciclo_promocoes(tg, estado, simular=True)
         return
 
     faltando = [k for k, v in config.DESTINOS.items() if not v]
@@ -356,6 +446,10 @@ def main():
                 ciclo_jogos(tg, estado)
             except Exception as e:
                 log.error("Erro no ciclo de jogos: %s", e)
+            try:
+                ciclo_promocoes(tg, estado)
+            except Exception as e:
+                log.error("Erro no ciclo de promoções: %s", e)
             estado.salvar()
             proximo_jogos = agora + config.INTERVALO_JOGOS
         try:

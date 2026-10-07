@@ -32,6 +32,7 @@ DESTINOS = {
     "hardware": _destino("HARDWARE"),
     "perifericos": _destino("PERIFERICOS"),
     "jogos_gratis": _destino("JOGOS_GRATIS"),
+    "jogos_promo": _destino("JOGOS_PROMO"),
 }
 
 # Chat da equipe que recebe as ofertas suspeitas para análise (vazio = descarta direto)
@@ -67,6 +68,13 @@ PRECO_MINIMO = float(os.environ.get("PRECO_MINIMO", "20"))
 DESCONTO_MINIMO = float(os.environ.get("DESCONTO_MINIMO", "10"))
 DIAS_SEM_REPETIR = float(os.environ.get("DIAS_SEM_REPETIR", "3"))
 MAX_POR_HORA = int(os.environ.get("MAX_POR_HORA", "8"))
+# Ofertas que esbarram no limite por hora esperam numa fila; depois disso são descartadas
+FILA_HORAS = float(os.environ.get("FILA_HORAS", "3"))
+
+# Jogos em promoção (Steam e Epic)
+JOGOS_DESCONTO_MINIMO = float(os.environ.get("JOGOS_DESCONTO_MINIMO", "50"))
+JOGOS_PROMO_POR_HORA = int(os.environ.get("JOGOS_PROMO_POR_HORA", "4"))
+JOGOS_DIAS_SEM_REPETIR = float(os.environ.get("JOGOS_DIAS_SEM_REPETIR", "14"))
 
 # Pasta do estado e do log (no servidor/Docker, aponte DATA_DIR para um volume persistente)
 DADOS = Path(os.environ.get("DATA_DIR", "").strip() or BASE)
